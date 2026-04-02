@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import KleosOrb from '../components/KleosOrb';
 import { generateBrief } from '../services/kleosApi';
+import { useKleosVoice } from '../hooks/useKleosVoice';
 
 // ─── Space background ────────────────────────────────────────────────────────
 
@@ -158,22 +159,23 @@ function HomePanel({ user }) {
     );
 }
 
-function BriefPanel({ onOrbStateChange }) {
+function BriefPanel({ onOrbStateChange, voiceBrief, onVoiceBriefConsumed }) {
     const [projectName, setProjectName] = useState('');
     const [text, setText] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [result, setResult] = useState(null);
+    const [policyAccepted, setPolicyAccepted] = useState(
+        () => localStorage.getItem('kleos_img_policy') === '1'
+    );
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
+    const runBrief = useCallback(async (pName, briefText) => {
         setError('');
         setResult(null);
         setLoading(true);
         onOrbStateChange('listening');
-
         try {
-            const data = await generateBrief(projectName, text);
+            const data = await generateBrief(pName, briefText);
             setResult(data);
             onOrbStateChange('speaking');
             setTimeout(() => onOrbStateChange('idle'), 2000);
@@ -183,6 +185,22 @@ function BriefPanel({ onOrbStateChange }) {
         } finally {
             setLoading(false);
         }
+    }, [onOrbStateChange]);
+
+    // Voice auto-fill: fill form fields, then auto-submit after a beat
+    useEffect(() => {
+        if (!voiceBrief) return;
+        const { projectName: pName, briefText } = voiceBrief;
+        setProjectName(pName);
+        setText(briefText);
+        onVoiceBriefConsumed();
+        const timer = setTimeout(() => runBrief(pName, briefText), 700);
+        return () => clearTimeout(timer);
+    }, [voiceBrief]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        runBrief(projectName, text);
     };
 
     return (
@@ -222,6 +240,26 @@ function BriefPanel({ onOrbStateChange }) {
 
             {result && (
                 <div style={{ marginTop: '40px' }}>
+                    {/* Policy banner — shown once until dismissed */}
+                    {!policyAccepted && (
+                        <div style={{
+                            display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+                            gap: '12px', padding: '12px 16px', marginBottom: '24px',
+                            background: 'rgba(255,140,66,0.06)', border: '1px solid rgba(255,140,66,0.18)',
+                            borderRadius: '10px',
+                        }}>
+                            <p style={{ color: 'rgba(255,200,150,0.55)', fontSize: '11px', lineHeight: 1.7, margin: 0, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
+                                Inspiration images are sourced from Pinterest and Unsplash for creative reference only.
+                                All rights belong to their respective creators — click any image to view the original work and credit the artist.
+                            </p>
+                            <button
+                                onClick={() => { localStorage.setItem('kleos_img_policy', '1'); setPolicyAccepted(true); }}
+                                style={{ flexShrink: 0, background: 'none', border: 'none', color: 'rgba(255,140,66,0.6)', cursor: 'pointer', fontSize: '16px', lineHeight: 1, padding: '0 4px' }}
+                                title="Dismiss"
+                            >×</button>
+                        </div>
+                    )}
+
                     <p style={panelStyles.eyebrow}>Design Directions</p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '32px', marginTop: '16px' }}>
                         {result.directions.map((direction, i) => (
@@ -236,12 +274,31 @@ function BriefPanel({ onOrbStateChange }) {
                                 {direction.images.length > 0 && (
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '8px', marginTop: '14px' }}>
                                         {direction.images.map((img, k) => (
-                                            <a key={k} href={img.link} target="_blank" rel="noreferrer">
+                                            <a key={k} href={img.link} target="_blank" rel="noreferrer" style={{ display: 'block', textDecoration: 'none', position: 'relative' }}>
                                                 <img
                                                     src={img.thumb}
-                                                    alt={img.credit}
+                                                    alt={img.title || img.credit}
                                                     style={{ width: '100%', height: '90px', objectFit: 'cover', borderRadius: '8px', display: 'block' }}
                                                 />
+                                                {/* Attribution overlay */}
+                                                <div style={{
+                                                    position: 'absolute', bottom: 0, left: 0, right: 0,
+                                                    padding: '18px 6px 5px',
+                                                    background: 'linear-gradient(transparent, rgba(5,2,15,0.82))',
+                                                    borderRadius: '0 0 8px 8px',
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                                }}>
+                                                    <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '9px', fontFamily: '-apple-system, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '80%' }}>
+                                                        {img.credit}
+                                                    </span>
+                                                    <span style={{
+                                                        fontSize: '8px', padding: '1px 5px', borderRadius: '4px', flexShrink: 0,
+                                                        background: img.platform === 'Pinterest' ? 'rgba(230,0,35,0.6)' : 'rgba(255,255,255,0.15)',
+                                                        color: '#fff', fontFamily: '-apple-system, sans-serif',
+                                                    }}>
+                                                        {img.platform}
+                                                    </span>
+                                                </div>
                                             </a>
                                         ))}
                                     </div>
@@ -456,6 +513,7 @@ export default function Dashboard() {
     const [activeSection, setActiveSection] = useState(null);
     const [user, setUser] = useState(null);
     const [orbState, setOrbState] = useState('idle');
+    const [voiceBrief, setVoiceBrief] = useState(null);
 
     useEffect(() => {
         supabase.auth.getUser().then(({ data }) => setUser(data.user));
@@ -470,12 +528,27 @@ export default function Dashboard() {
         setActiveSection(prev => prev === id ? null : id);
     };
 
+    const handleRoute = useCallback((section) => {
+        setActiveSection(section);
+    }, []);
+
+    const handleBriefFill = useCallback((projectName, briefText) => {
+        setActiveSection('brief');
+        setVoiceBrief({ projectName, briefText });
+    }, []);
+
+    const { listening, awake } = useKleosVoice({
+        onRoute: handleRoute,
+        onOrbStateChange: setOrbState,
+        onBriefFill: handleBriefFill,
+    });
+
     const isExpanded = activeSection !== null;
 
     const renderPanel = () => {
         switch (activeSection) {
             case 'home':     return <HomePanel user={user} />;
-            case 'brief':    return <BriefPanel onOrbStateChange={setOrbState} />;
+            case 'brief':    return <BriefPanel onOrbStateChange={setOrbState} voiceBrief={voiceBrief} onVoiceBriefConsumed={() => setVoiceBrief(null)} />;
             case 'projects': return <ProjectsPanel />;
             case 'settings': return <SettingsPanel user={user} onSignOut={handleSignOut} />;
             default:         return null;
@@ -548,9 +621,9 @@ export default function Dashboard() {
                     zIndex: 6,
                     transition: 'top 0.7s cubic-bezier(0.4,0,0.2,1), left 0.7s cubic-bezier(0.4,0,0.2,1), transform 0.7s cubic-bezier(0.4,0,0.2,1)',
                     ...(isExpanded ? {
-                        top: '20px',
-                        left: '20px',
-                        transform: 'scale(0.29)',
+                        top: '16px',
+                        left: '16px',
+                        transform: 'scale(0.38)',
                         transformOrigin: 'top left',
                     } : {
                         top: '50%',
@@ -578,21 +651,23 @@ export default function Dashboard() {
                     }}>
                         <button className="gradient-border" style={{
                             width: '48px', height: '48px', borderRadius: '50%',
-                            background: 'transparent',
+                            background: awake ? 'rgba(255,140,66,0.2)' : listening ? 'rgba(255,140,66,0.08)' : 'transparent',
                             border: 'none',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            cursor: 'not-allowed',
-                            color: 'rgba(255,180,100,0.4)',
-                        }} disabled title="Voice coming in Sprint 4">
+                            cursor: 'default',
+                            color: awake ? 'rgba(255,200,100,1)' : listening ? 'rgba(255,180,100,0.6)' : 'rgba(255,180,100,0.25)',
+                            transition: 'background 0.2s, color 0.2s',
+                        }}>
                             <MicIcon />
                         </button>
                         <p style={{
-                            color: 'rgba(255,200,150,0.2)',
+                            color: awake ? 'rgba(255,200,100,0.8)' : listening ? 'rgba(255,180,100,0.4)' : 'rgba(255,200,150,0.15)',
                             fontSize: '11px',
                             letterSpacing: '2px',
                             textTransform: 'uppercase',
                             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-                        }}>Voice — Sprint 4</p>
+                            transition: 'color 0.2s',
+                        }}>{awake ? 'Go ahead...' : listening ? 'Say "Kleos"' : 'Always listening'}</p>
                     </div>
                 )}
 

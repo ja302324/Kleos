@@ -37,12 +37,18 @@ function buildGeodesic() {
 }
 
 // state: 'idle' | 'listening' | 'speaking'
-export default function KleosOrb({ size = 340, state = 'idle' }) {
+export default function KleosOrb({ size = 340, state = 'idle', analyser = null }) {
     const canvasRef = useRef(null);
     const wrapRef = useRef(null);
     const stateRef = useRef(state);
+    const analyserRef = useRef(analyser);
+    const freqDataRef = useRef(null);
 
     useEffect(() => { stateRef.current = state; }, [state]);
+    useEffect(() => {
+        analyserRef.current = analyser;
+        if (analyser) freqDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+    }, [analyser]);
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -91,8 +97,18 @@ export default function KleosOrb({ size = 340, state = 'idle' }) {
             return                        { rotSpeed: 0.005, pulseAmp: 1.0, glowAlpha: 0.22, coreScale: 1.0 };
         }
 
+        function getAudioLevels() {
+            if (!analyserRef.current || !freqDataRef.current) return { bass: 0, mid: 0 };
+            analyserRef.current.getByteFrequencyData(freqDataRef.current);
+            const bins = freqDataRef.current;
+            const bass = bins.slice(0, 8).reduce((a, b) => a + b, 0) / (8 * 255);
+            const mid  = bins.slice(8, 24).reduce((a, b) => a + b, 0) / (16 * 255);
+            return { bass, mid };
+        }
+
         function draw() {
             const mod = getStateModifiers();
+            const { bass, mid } = getAudioLevels();
             ctx.clearRect(0, 0, W, H);
             ctx.globalCompositeOperation = 'source-over';
 
@@ -104,9 +120,10 @@ export default function KleosOrb({ size = 340, state = 'idle' }) {
             ctx.fillStyle = bgG; ctx.fill();
 
             for (const d of dust) {
-                d.theta += d.speedT; d.phi2 += d.speedP;
-                const pulse = 0.6 + 0.4 * mod.pulseAmp * Math.abs(Math.sin(t * d.ps + d.po));
-                const r = d.baseR * (0.96 + 0.08 * Math.sin(t * d.ps * 0.5 + d.po));
+                d.theta += d.speedT + bass * 0.02;
+                d.phi2 += d.speedP + mid * 0.01;
+                const pulse = 0.6 + 0.4 * mod.pulseAmp * Math.abs(Math.sin(t * d.ps + d.po)) + bass * 1.2;
+                const r = d.baseR * (0.96 + 0.08 * Math.sin(t * d.ps * 0.5 + d.po) + bass * 0.35);
                 const x = cx + r * Math.sin(d.phi2) * Math.cos(d.theta);
                 const y = cy + r * Math.sin(d.phi2) * Math.sin(d.theta) * 0.6;
                 const z = r * Math.cos(d.phi2);
@@ -141,19 +158,20 @@ export default function KleosOrb({ size = 340, state = 'idle' }) {
                 });
 
             ctx.globalCompositeOperation = 'screen';
-            ctx.beginPath(); ctx.arc(cx, cy, SPHERE_R, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(255,220,140,0.45)'; ctx.lineWidth = 1.5; ctx.stroke();
+            const ringRadius = SPHERE_R * (1 + bass * 0.12);
+            ctx.beginPath(); ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(255,220,140,${0.45 + bass * 0.4})`; ctx.lineWidth = 1.5 + bass * 3; ctx.stroke();
 
-            const coreSize = SPHERE_R * 0.22 * mod.coreScale;
+            const coreSize = SPHERE_R * 0.22 * mod.coreScale * (1 + bass * 0.6);
             const coreG = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreSize);
             coreG.addColorStop(0, 'rgba(255,255,240,0.95)');
-            coreG.addColorStop(0.3, 'rgba(255,200,100,0.55)');
+            coreG.addColorStop(0.3, `rgba(255,${Math.round(180 + mid * 60)},100,${0.55 + bass * 0.4})`);
             coreG.addColorStop(1, 'rgba(0,0,0,0)');
             ctx.beginPath(); ctx.arc(cx, cy, coreSize, 0, Math.PI * 2);
             ctx.fillStyle = coreG; ctx.fill();
 
             ctx.globalCompositeOperation = 'source-over';
-            rotY += mod.rotSpeed; t += 0.013;
+            rotY += mod.rotSpeed + bass * 0.03; t += 0.013;
             animId = requestAnimationFrame(draw);
         }
 

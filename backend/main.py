@@ -1,9 +1,13 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import anthropic
 import httpx
+import base64
+import json
+import re
 import os
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,6 +24,59 @@ app.add_middleware(
 
 anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
+PINTEREST_APP_ID = os.getenv("PINTEREST_APP_ID")
+PINTEREST_APP_SECRET = os.getenv("PINTEREST_APP_SECRET")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = "sB7vwSCyX0tQmU24cW2C"
+
+# Pinterest app-level token cache
+_pinterest_token: str | None = None
+_pinterest_token_expiry: float = 0.0
+
+
+async def get_pinterest_token() -> str | None:
+    global _pinterest_token, _pinterest_token_expiry
+    if not PINTEREST_APP_ID or not PINTEREST_APP_SECRET:
+        return None
+    if _pinterest_token and time.time() < _pinterest_token_expiry - 60:
+        return _pinterest_token
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            "https://api.pinterest.com/v5/oauth/token",
+            data={"grant_type": "client_credentials"},
+            auth=(PINTEREST_APP_ID, PINTEREST_APP_SECRET),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if resp.status_code != 200:
+            print(f"Pinterest auth error {resp.status_code}: {resp.text}")
+            return None
+        body = resp.json()
+        _pinterest_token = body.get("access_token")
+        _pinterest_token_expiry = time.time() + body.get("expires_in", 2592000)
+        return _pinterest_token
+
+KLEOS_SYSTEM_PROMPT = """You are Kleos, a confident and concise AI design companion — like Jarvis but for designers.
+You help designers with creative briefs, visual direction, color palettes, typography, and design strategy.
+Respond in 1-2 short sentences. Be direct, warm, and sharp. No bullet points, no markdown, no lists.
+Never say you're an AI. Just be Kleos.
+
+If the user describes a design project or brief (mentioning a client, product, brand, style, audience, or creative goal):
+- Extract a short project name (2-5 words) and a brief description from what they said.
+- End your response with [ACTION:brief][NAME:project name here][BRIEF:brief description here]
+- Example: user says "I need a brand for a coffee shop in Brooklyn, warm and rustic" →
+  reply: "Love that direction — warm textures and earthy tones will nail it. Let me pull some inspiration." [ACTION:brief][NAME:Brooklyn Coffee Shop Brand][BRIEF:A warm, rustic brand identity for a Brooklyn coffee shop. Earthy tones, artisanal feel.]
+
+If the user just wants to open the brief form without describing a brief — end with [ACTION:brief] only.
+If they want to see their saved projects or library — end with [ACTION:projects].
+If they want to go home or to the dashboard — end with [ACTION:home].
+Strip ALL tags before speaking the response aloud."""
+
+ROUTING_COMMANDS = [
+    {"patterns": ["home", "go home", "dashboard"], "section": "home"},
+    {"patterns": ["new brief", "create brief", "start brief", "brief"], "section": "brief"},
+    {"patterns": ["projects", "library", "my projects", "take me to projects", "project"], "section": "projects"},
+    {"patterns": ["settings", "account"], "section": "settings"},
+]
 
 
 class BriefRequest(BaseModel):
@@ -27,21 +84,140 @@ class BriefRequest(BaseModel):
     project_name: str
 
 
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async def synthesize(text: str) -> str:
+    """Call ElevenLabs and return base64 MP3."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+            headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+            json={
+                "text": text,
+                "model_id": "eleven_turbo_v2_5",
+                "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+            },
+        )
+        if response.status_code != 200:
+            print(f"ElevenLabs error {response.status_code}: {response.text}")
+            return None
+        return base64.b64encode(response.content).decode()
+
+
+def detect_route(text: str):
+    lower = text.lower()
+    for cmd in ROUTING_COMMANDS:
+        if any(p in lower for p in cmd["patterns"]):
+            return cmd["section"]
+    return None
+
+
+# ─── Health check ─────────────────────────────────────────────────────────────
+
 @app.get("/")
 def health_check():
     return {"status": "Kleos backend is running"}
 
 
+# ─── WebSocket voice endpoint ─────────────────────────────────────────────────
+
+@app.websocket("/ws/voice")
+async def voice_handler(ws: WebSocket):
+    await ws.accept()
+    conversation_history = []
+
+    try:
+        while True:
+            raw = await ws.receive_text()
+            message = json.loads(raw)
+
+            if message.get("type") == "ready":
+                # User has interacted — safe to play audio now
+                await ws.send_json({"type": "state", "value": "speaking"})
+                audio = await synthesize("Kleos online. I'm listening.")
+                if audio:
+                    await ws.send_json({"type": "audio", "data": audio})
+                await ws.send_json({"type": "state", "value": "idle"})
+                continue
+
+            if message.get("type") != "transcript":
+                continue
+
+            transcript = message["text"].strip()
+            if not transcript:
+                continue
+
+            # Check for routing command first (no Claude needed)
+            section = detect_route(transcript)
+            if section:
+                await ws.send_json({"type": "state", "value": "speaking"})
+                audio = await synthesize(f"Sure, taking you to {section}.")
+                if audio:
+                    await ws.send_json({"type": "audio", "data": audio})
+                await ws.send_json({"type": "route", "section": section})
+                await ws.send_json({"type": "state", "value": "idle"})
+                continue
+
+            # Conversational response via Claude
+            await ws.send_json({"type": "state", "value": "thinking"})
+
+            conversation_history.append({"role": "user", "content": transcript})
+
+            # Keep last 10 turns to avoid token bloat
+            recent = conversation_history[-10:]
+
+            try:
+                result = anthropic_client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=150,
+                    system=KLEOS_SYSTEM_PROMPT,
+                    messages=recent,
+                )
+                reply = result.content[0].text.strip()
+            except Exception as e:
+                print(f"Claude error: {e}")
+                reply = "Sorry, I ran into an issue. Try again."
+
+            # Extract structured tags
+            action_match = re.search(r'\[ACTION:(\w+)\]', reply)
+            name_match   = re.search(r'\[NAME:([^\]]+)\]', reply)
+            brief_match  = re.search(r'\[BRIEF:([^\]]+)\]', reply)
+            clean_reply  = re.sub(r'\[(ACTION|NAME|BRIEF):[^\]]+\]', '', reply).strip()
+
+            conversation_history.append({"role": "assistant", "content": clean_reply})
+
+            await ws.send_json({"type": "state", "value": "speaking"})
+            audio = await synthesize(clean_reply)
+            if audio:
+                await ws.send_json({"type": "audio", "data": audio})
+            if action_match:
+                section = action_match.group(1).lower()
+                await ws.send_json({"type": "route", "section": section})
+                # If brief intent includes extracted content, auto-fill the form
+                if section == "brief" and name_match and brief_match:
+                    await ws.send_json({
+                        "type": "brief_fill",
+                        "projectName": name_match.group(1).strip(),
+                        "briefText": brief_match.group(1).strip(),
+                    })
+            await ws.send_json({"type": "state", "value": "idle"})
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+
+
+# ─── Brief endpoint ───────────────────────────────────────────────────────────
+
 @app.post("/api/brief")
 async def generate_brief(request: BriefRequest):
-    # 1. Call Claude for design directions
     message = anthropic_client.messages.create(
         model="claude-opus-4-6",
         max_tokens=1024,
-        messages=[
-            {
-                "role": "user",
-                "content": f"""You are Kleos, an AI design companion. A designer has submitted this creative brief:
+        messages=[{
+            "role": "user",
+            "content": f"""You are Kleos, an AI design companion. A designer has submitted this creative brief:
 
 Project: {request.project_name}
 Brief: {request.text}
@@ -61,11 +237,9 @@ Format your response as JSON like this:
     }}
   ]
 }}"""
-            }
-        ]
+        }]
     )
 
-    import json
     raw = message.content[0].text.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
@@ -73,24 +247,64 @@ Format your response as JSON like this:
             raw = raw[4:]
     directions = json.loads(raw.strip())
 
-    # 2. Fetch Unsplash images for each direction
     async with httpx.AsyncClient() as client:
         for direction in directions["directions"]:
             query = " ".join(direction["keywords"])
-            response = await client.get(
-                "https://api.unsplash.com/search/photos",
-                params={"query": query, "per_page": 4, "orientation": "landscape"},
-                headers={"Authorization": f"Client-ID {UNSPLASH_KEY}"}
-            )
-            results = response.json()
-            direction["images"] = [
-                {
-                    "url": photo["urls"]["regular"],
-                    "thumb": photo["urls"]["thumb"],
-                    "credit": photo["user"]["name"],
-                    "link": photo["links"]["html"]
-                }
-                for photo in results.get("results", [])
-            ]
+            images = []
+
+            # Pinterest — design inspiration (preferred when credentials are set)
+            pinterest_token = await get_pinterest_token()
+            if pinterest_token:
+                try:
+                    pins_resp = await client.get(
+                        "https://api.pinterest.com/v5/search/partner/pins",
+                        params={"term": query, "country_code": "US", "limit": 3},
+                        headers={"Authorization": f"Bearer {pinterest_token}"},
+                    )
+                    for pin in pins_resp.json().get("items", []):
+                        media = pin.get("media", {})
+                        img_sizes = media.get("images", {})
+                        thumb_url = (
+                            img_sizes.get("400x300", {}).get("url")
+                            or img_sizes.get("150x150", {}).get("url")
+                        )
+                        full_url = img_sizes.get("1200x", {}).get("url") or thumb_url
+                        creator = pin.get("board_owner", {})
+                        if thumb_url:
+                            images.append({
+                                "url": full_url,
+                                "thumb": thumb_url,
+                                "title": pin.get("title") or pin.get("description", ""),
+                                "credit": creator.get("username", "Unknown"),
+                                "credit_url": f"https://www.pinterest.com/{creator.get('username', '')}/",
+                                "link": f"https://www.pinterest.com/pin/{pin.get('id', '')}/",
+                                "platform": "Pinterest",
+                            })
+                except Exception as e:
+                    print(f"Pinterest error: {e}")
+
+            # Unsplash — fill remaining slots (up to 4 total)
+            remaining = 4 - len(images)
+            if remaining > 0 and UNSPLASH_KEY:
+                try:
+                    uns = await client.get(
+                        "https://api.unsplash.com/search/photos",
+                        params={"query": query, "per_page": remaining, "orientation": "landscape"},
+                        headers={"Authorization": f"Client-ID {UNSPLASH_KEY}"},
+                    )
+                    for photo in uns.json().get("results", []):
+                        images.append({
+                            "url": photo["urls"]["regular"],
+                            "thumb": photo["urls"]["thumb"],
+                            "title": photo.get("description") or photo.get("alt_description", ""),
+                            "credit": photo["user"]["name"],
+                            "credit_url": photo["user"]["links"]["html"],
+                            "link": photo["links"]["html"],
+                            "platform": "Unsplash",
+                        })
+                except Exception as e:
+                    print(f"Unsplash error: {e}")
+
+            direction["images"] = images
 
     return directions
