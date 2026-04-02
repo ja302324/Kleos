@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import KleosOrb from '../components/KleosOrb';
-import { generateBrief } from '../services/kleosApi';
+import DesignBriefMoodBoard from '../components/DesignBriefMoodBoard';
+import { generateDesignBrief } from '../services/kleosApi';
 import { useKleosVoice } from '../hooks/useKleosVoice';
 
 // ─── Space background ────────────────────────────────────────────────────────
@@ -159,24 +160,26 @@ function HomePanel({ user }) {
     );
 }
 
+const PROJECT_TYPES = [
+    'Brand Identity', 'UI / Product Design', 'Editorial / Print',
+    'Packaging', 'Motion / Video', 'Environmental / Spatial', 'Other',
+];
+
 function BriefPanel({ onOrbStateChange, voiceBrief, onVoiceBriefConsumed }) {
-    const [projectName, setProjectName] = useState('');
-    const [text, setText] = useState('');
+    const [projectType, setProjectType] = useState('');
+    const [brief, setBrief] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const [result, setResult] = useState(null);
-    const [policyAccepted, setPolicyAccepted] = useState(
-        () => localStorage.getItem('kleos_img_policy') === '1'
-    );
+    const [moodBoard, setMoodBoard] = useState(null);
 
-    const runBrief = useCallback(async (pName, briefText) => {
+    const runBrief = useCallback(async (type, briefText) => {
         setError('');
-        setResult(null);
+        setMoodBoard(null);
         setLoading(true);
-        onOrbStateChange('listening');
+        onOrbStateChange('thinking');
         try {
-            const data = await generateBrief(pName, briefText);
-            setResult(data);
+            const data = await generateDesignBrief(type, briefText);
+            setMoodBoard(data);
             onOrbStateChange('speaking');
             setTimeout(() => onOrbStateChange('idle'), 2000);
         } catch {
@@ -187,127 +190,70 @@ function BriefPanel({ onOrbStateChange, voiceBrief, onVoiceBriefConsumed }) {
         }
     }, [onOrbStateChange]);
 
-    // Voice auto-fill: fill form fields, then auto-submit after a beat
+    // Voice auto-fill — fills fields then auto-submits after a beat
     useEffect(() => {
         if (!voiceBrief) return;
-        const { projectName: pName, briefText } = voiceBrief;
-        setProjectName(pName);
-        setText(briefText);
+        const { projectName, briefText } = voiceBrief;
+        setProjectType(projectName);
+        setBrief(briefText);
         onVoiceBriefConsumed();
-        const timer = setTimeout(() => runBrief(pName, briefText), 700);
+        const timer = setTimeout(() => runBrief(projectName, briefText), 700);
         return () => clearTimeout(timer);
     }, [voiceBrief]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const handleSubmit = async (e) => {
+    const handleSubmit = (e) => {
         e.preventDefault();
-        runBrief(projectName, text);
+        runBrief(projectType, brief);
     };
 
     return (
         <div className="kleos-panel" style={panelStyles.wrap}>
             <p style={panelStyles.eyebrow}>New Brief</p>
             <h2 style={panelStyles.title}>Describe your vision</h2>
-            <p style={panelStyles.sub}>Kleos will find the inspiration and suggest the direction.</p>
+            <p style={panelStyles.sub}>Kleos will generate a full mood board — color, type, references, and direction.</p>
 
-            <form onSubmit={handleSubmit} style={{ marginTop: '28px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '480px' }}>
+            <form onSubmit={handleSubmit} style={{ marginTop: '28px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '520px' }}>
                 <div>
-                    <label style={panelStyles.label}>Project name</label>
-                    <input
-                        className="kleos-input"
-                        type="text"
-                        value={projectName}
-                        onChange={e => setProjectName(e.target.value)}
-                        placeholder="e.g. Brand identity for a wellness startup"
-                        required
-                    />
+                    <label style={panelStyles.label}>Project type</label>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {PROJECT_TYPES.map(t => (
+                            <button
+                                key={t} type="button"
+                                onClick={() => setProjectType(t)}
+                                style={{
+                                    padding: '6px 14px', borderRadius: '20px', fontSize: '12px', cursor: 'pointer',
+                                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+                                    border: projectType === t ? '1px solid rgba(255,140,66,0.6)' : '1px solid rgba(255,150,60,0.15)',
+                                    background: projectType === t ? 'rgba(255,140,66,0.12)' : 'transparent',
+                                    color: projectType === t ? 'rgba(255,200,120,0.95)' : 'rgba(255,200,150,0.4)',
+                                    transition: 'all 0.15s',
+                                }}
+                            >{t}</button>
+                        ))}
+                    </div>
                 </div>
                 <div>
                     <label style={panelStyles.label}>Brief</label>
                     <textarea
                         className="kleos-input"
-                        rows={5}
-                        value={text}
-                        onChange={e => setText(e.target.value)}
-                        placeholder="Describe the mood, audience, style references, colours, anything that matters..."
+                        rows={6}
+                        value={brief}
+                        onChange={e => setBrief(e.target.value)}
+                        placeholder="Describe the project — client, audience, mood, references, colours, anything that matters..."
                         required
                     />
                 </div>
                 {error && <p style={{ color: '#ff6b4a', fontSize: '12px' }}>{error}</p>}
-                <button type="submit" style={{ ...panelStyles.btn, opacity: loading ? 0.6 : 1, cursor: loading ? 'not-allowed' : 'pointer' }} disabled={loading}>
-                    {loading ? 'Kleos is thinking...' : 'Generate with Kleos'}
+                <button
+                    type="submit"
+                    style={{ ...panelStyles.btn, opacity: loading ? 0.6 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}
+                    disabled={loading}
+                >
+                    {loading ? 'Kleos is thinking...' : 'Generate Mood Board'}
                 </button>
             </form>
 
-            {result && (
-                <div style={{ marginTop: '40px' }}>
-                    {/* Policy banner — shown once until dismissed */}
-                    {!policyAccepted && (
-                        <div style={{
-                            display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-                            gap: '12px', padding: '12px 16px', marginBottom: '24px',
-                            background: 'rgba(255,140,66,0.06)', border: '1px solid rgba(255,140,66,0.18)',
-                            borderRadius: '10px',
-                        }}>
-                            <p style={{ color: 'rgba(255,200,150,0.55)', fontSize: '11px', lineHeight: 1.7, margin: 0, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
-                                Inspiration images are sourced from Pinterest and Unsplash for creative reference only.
-                                All rights belong to their respective creators — click any image to view the original work and credit the artist.
-                            </p>
-                            <button
-                                onClick={() => { localStorage.setItem('kleos_img_policy', '1'); setPolicyAccepted(true); }}
-                                style={{ flexShrink: 0, background: 'none', border: 'none', color: 'rgba(255,140,66,0.6)', cursor: 'pointer', fontSize: '16px', lineHeight: 1, padding: '0 4px' }}
-                                title="Dismiss"
-                            >×</button>
-                        </div>
-                    )}
-
-                    <p style={panelStyles.eyebrow}>Design Directions</p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px', marginTop: '16px' }}>
-                        {result.directions.map((direction, i) => (
-                            <div key={i} style={panelStyles.directionCard}>
-                                <h3 style={panelStyles.directionName}>{direction.name}</h3>
-                                <p style={panelStyles.directionDesc}>{direction.description}</p>
-                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px' }}>
-                                    {direction.keywords.map((kw, j) => (
-                                        <span key={j} style={panelStyles.keyword}>{kw}</span>
-                                    ))}
-                                </div>
-                                {direction.images.length > 0 && (
-                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '8px', marginTop: '14px' }}>
-                                        {direction.images.map((img, k) => (
-                                            <a key={k} href={img.link} target="_blank" rel="noreferrer" style={{ display: 'block', textDecoration: 'none', position: 'relative' }}>
-                                                <img
-                                                    src={img.thumb}
-                                                    alt={img.title || img.credit}
-                                                    style={{ width: '100%', height: '90px', objectFit: 'cover', borderRadius: '8px', display: 'block' }}
-                                                />
-                                                {/* Attribution overlay */}
-                                                <div style={{
-                                                    position: 'absolute', bottom: 0, left: 0, right: 0,
-                                                    padding: '18px 6px 5px',
-                                                    background: 'linear-gradient(transparent, rgba(5,2,15,0.82))',
-                                                    borderRadius: '0 0 8px 8px',
-                                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                                }}>
-                                                    <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '9px', fontFamily: '-apple-system, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '80%' }}>
-                                                        {img.credit}
-                                                    </span>
-                                                    <span style={{
-                                                        fontSize: '8px', padding: '1px 5px', borderRadius: '4px', flexShrink: 0,
-                                                        background: img.platform === 'Pinterest' ? 'rgba(230,0,35,0.6)' : 'rgba(255,255,255,0.15)',
-                                                        color: '#fff', fontFamily: '-apple-system, sans-serif',
-                                                    }}>
-                                                        {img.platform}
-                                                    </span>
-                                                </div>
-                                            </a>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
+            <DesignBriefMoodBoard data={moodBoard} />
         </div>
     );
 }

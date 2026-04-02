@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import anthropic
+import asyncio
 import httpx
 import base64
 import json
@@ -26,6 +27,7 @@ anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 UNSPLASH_KEY = os.getenv("UNSPLASH_ACCESS_KEY")
 PINTEREST_APP_ID = os.getenv("PINTEREST_APP_ID")
 PINTEREST_APP_SECRET = os.getenv("PINTEREST_APP_SECRET")
+PEXELS_KEY = os.getenv("PEXELS_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = "sB7vwSCyX0tQmU24cW2C"
 
@@ -61,10 +63,10 @@ Respond in 1-2 short sentences. Be direct, warm, and sharp. No bullet points, no
 Never say you're an AI. Just be Kleos.
 
 If the user describes a design project or brief (mentioning a client, product, brand, style, audience, or creative goal):
-- Extract a short project name (2-5 words) and a brief description from what they said.
-- End your response with [ACTION:brief][NAME:project name here][BRIEF:brief description here]
+- Extract a project type (e.g. Brand Identity, UI Design, Packaging) and a brief description from what they said.
+- End your response with [ACTION:brief][NAME:project type here][BRIEF:brief description here]
 - Example: user says "I need a brand for a coffee shop in Brooklyn, warm and rustic" →
-  reply: "Love that direction — warm textures and earthy tones will nail it. Let me pull some inspiration." [ACTION:brief][NAME:Brooklyn Coffee Shop Brand][BRIEF:A warm, rustic brand identity for a Brooklyn coffee shop. Earthy tones, artisanal feel.]
+  reply: "Love that direction — warm textures and earthy tones will nail it. Let me build the mood board." [ACTION:brief][NAME:Brand Identity][BRIEF:A warm, rustic brand identity for a Brooklyn coffee shop. Earthy tones, artisanal feel.]
 
 If the user just wants to open the brief form without describing a brief — end with [ACTION:brief] only.
 If they want to see their saved projects or library — end with [ACTION:projects].
@@ -82,6 +84,93 @@ ROUTING_COMMANDS = [
 class BriefRequest(BaseModel):
     text: str
     project_name: str
+
+class DesignBriefRequest(BaseModel):
+    brief: str
+    project_type: str = ""
+
+
+CREATIVE_DIRECTOR_PROMPT = """You are the creative intelligence behind Kleos — a senior creative director and design strategist with 20 years of experience across branding, editorial, digital product, and spatial design.
+
+When given a design brief, analyze it deeply and return a structured creative direction. Be specific and opinionated — not generic.
+
+Return ONLY valid JSON (no markdown, no extra text) in this exact structure:
+{
+  "visual_direction": "2-3 sentences describing the overall visual feel, tone, and creative approach",
+  "tone": "2-4 words (e.g. Bold, cerebral, understated)",
+  "aesthetic": "Name of the aesthetic direction (e.g. New Luxury Minimalism)",
+  "design_keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
+  "color_palette": [
+    { "hex": "#HEXCODE", "mood": "one word" },
+    { "hex": "#HEXCODE", "mood": "one word" },
+    { "hex": "#HEXCODE", "mood": "one word" },
+    { "hex": "#HEXCODE", "mood": "one word" },
+    { "hex": "#HEXCODE", "mood": "one word" }
+  ],
+  "typography": {
+    "heading": { "font": "Font Name", "style": "e.g. Condensed Bold", "rationale": "one sentence" },
+    "body": { "font": "Font Name", "style": "e.g. Regular 16/24", "rationale": "one sentence" }
+  },
+  "pinterest_suggestions": [
+    { "label": "Search label", "url": "https://pinterest.com/search/pins/?q=url+encoded+query", "reason": "one sentence" },
+    { "label": "Search label", "url": "https://pinterest.com/search/pins/?q=url+encoded+query", "reason": "one sentence" },
+    { "label": "Search label", "url": "https://pinterest.com/search/pins/?q=url+encoded+query", "reason": "one sentence" },
+    { "label": "Search label", "url": "https://pinterest.com/search/pins/?q=url+encoded+query", "reason": "one sentence" },
+    { "label": "Search label", "url": "https://pinterest.com/search/pins/?q=url+encoded+query", "reason": "one sentence" }
+  ]
+}"""
+
+
+# ─── Mood board API helpers ───────────────────────────────────────────────────
+
+async def fetch_colormind_palette() -> list:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post("http://colormind.io/api/", json={"model": "default"})
+            if resp.status_code == 200:
+                return [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in resp.json().get("result", [])]
+    except Exception as e:
+        print(f"Colormind error: {e}")
+    return []
+
+
+async def enrich_color(hex_code: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(f"https://www.thecolorapi.com/id?hex={hex_code.lstrip('#')}")
+            data = resp.json()
+            return {"name": data["name"]["value"], "hex": hex_code}
+    except Exception as e:
+        print(f"Color API error for {hex_code}: {e}")
+    return {"name": "", "hex": hex_code}
+
+
+async def fetch_pexels_images(keywords: list) -> list:
+    if not PEXELS_KEY:
+        return []
+    query = " ".join(keywords[:3])
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                "https://api.pexels.com/v1/search",
+                params={"query": query, "per_page": 9, "orientation": "landscape"},
+                headers={"Authorization": PEXELS_KEY},
+            )
+            return [
+                {
+                    "url": p["src"]["medium"],
+                    "thumb": p["src"]["small"],
+                    "full": p["src"]["large2x"],
+                    "credit": p["photographer"],
+                    "credit_url": p["photographer_url"],
+                    "link": p["url"],
+                    "platform": "Pexels",
+                }
+                for p in resp.json().get("photos", [])
+            ]
+    except Exception as e:
+        print(f"Pexels error: {e}")
+    return []
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -208,7 +297,47 @@ async def voice_handler(ws: WebSocket):
         print(f"WebSocket error: {e}")
 
 
-# ─── Brief endpoint ───────────────────────────────────────────────────────────
+# ─── Design Brief / Mood Board endpoint ──────────────────────────────────────
+
+@app.post("/api/design-brief")
+async def design_brief(request: DesignBriefRequest):
+    prompt = f"Project Type: {request.project_type}\nBrief: {request.brief}" if request.project_type else f"Brief: {request.brief}"
+
+    result = anthropic_client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=2048,
+        system=CREATIVE_DIRECTOR_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = result.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    mood_board = json.loads(raw.strip())
+
+    palette = mood_board.get("color_palette", [])
+    keywords = mood_board.get("design_keywords", [])
+
+    # All external calls in parallel
+    results = await asyncio.gather(
+        fetch_colormind_palette(),
+        fetch_pexels_images(keywords),
+        *[enrich_color(c["hex"]) for c in palette],
+    )
+
+    mood_board["colormind_palette"] = results[0]
+    mood_board["images"] = results[1]
+    enriched = results[2:]
+    for i, color in enumerate(palette):
+        if i < len(enriched):
+            color["name"] = enriched[i].get("name", "")
+
+    return mood_board
+
+
+# ─── Brief endpoint (legacy) ──────────────────────────────────────────────────
 
 @app.post("/api/brief")
 async def generate_brief(request: BriefRequest):
