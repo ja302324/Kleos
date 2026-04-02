@@ -126,22 +126,68 @@ function ImageGrid({ images }) {
     );
 }
 
+// Gradient backgrounds for Pinterest cards — one per slot, cycles
+const PIN_GRADIENTS = [
+    'linear-gradient(135deg, #1a0a2e, #3d1a5c)',
+    'linear-gradient(135deg, #0a1628, #1a3a5c)',
+    'linear-gradient(135deg, #1a1a0a, #3d3010)',
+    'linear-gradient(135deg, #0a1a10, #103d20)',
+    'linear-gradient(135deg, #1a0a0a, #3d1010)',
+];
+
 // ── Pinterest Suggestions ─────────────────────────────────────────────────────
 function PinterestSuggestions({ suggestions }) {
     if (!suggestions?.length) return null;
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {suggestions.map((s, i) => (
-                <a key={i} href={s.url} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-                    <div style={card}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span style={{ color: '#E60023' }}><PinterestIcon /></span>
-                                <span style={{ color: 'rgba(255,200,150,0.9)', fontSize: '13px', fontWeight: '500' }}>{s.label}</span>
-                            </div>
-                            <span style={{ color: 'rgba(255,200,150,0.3)' }}><ExternalIcon /></span>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
+            {suggestions.map((item, i) => (
+                <a key={i} href={item.url} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+                    <div style={{
+                        borderRadius: '14px',
+                        overflow: 'hidden',
+                        border: '1px solid rgba(255,150,60,0.1)',
+                        background: PIN_GRADIENTS[i % PIN_GRADIENTS.length],
+                        transition: 'border-color 0.2s, transform 0.2s',
+                        cursor: 'pointer',
+                    }}>
+                        {/* Visual preview area */}
+                        <div style={{
+                            height: '90px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            position: 'relative',
+                            overflow: 'hidden',
+                        }}>
+                            <span style={{
+                                fontSize: '32px',
+                                opacity: 0.15,
+                                position: 'absolute',
+                                color: '#fff',
+                            }}>
+                                <PinterestIcon />
+                            </span>
+                            <span style={{
+                                color: 'rgba(255,255,255,0.7)',
+                                fontSize: '11px',
+                                letterSpacing: '1.5px',
+                                textTransform: 'uppercase',
+                                fontFamily: '-apple-system, sans-serif',
+                                textAlign: 'center',
+                                padding: '0 16px',
+                                position: 'relative',
+                                zIndex: 1,
+                            }}>{item.label}</span>
                         </div>
-                        <p style={{ color: 'rgba(255,200,150,0.45)', fontSize: '12px', lineHeight: 1.6, margin: 0 }}>{s.reason}</p>
+                        {/* Info strip */}
+                        <div style={{ padding: '10px 14px 12px', background: 'rgba(0,0,0,0.3)' }}>
+                            <p style={{ color: 'rgba(255,200,150,0.45)', fontSize: '11px', lineHeight: 1.6, margin: '0 0 8px' }}>{item.reason}</p>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                <span style={{ color: '#E60023', flexShrink: 0 }}><PinterestIcon /></span>
+                                <span style={{ color: 'rgba(255,200,150,0.35)', fontSize: '10px', fontFamily: '-apple-system, sans-serif' }}>Open on Pinterest</span>
+                                <span style={{ color: 'rgba(255,200,150,0.25)', marginLeft: 'auto' }}><ExternalIcon /></span>
+                            </div>
+                        </div>
                     </div>
                 </a>
             ))}
@@ -284,10 +330,3 @@ const s = {
     },
 };
 
-const card = {
-    background: 'rgba(255,255,255,0.02)',
-    border: '1px solid rgba(255,150,60,0.1)',
-    borderRadius: '12px',
-    padding: '14px 16px',
-    transition: 'border-color 0.2s, background 0.2s',
-};
