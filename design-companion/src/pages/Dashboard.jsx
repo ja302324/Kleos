@@ -460,7 +460,6 @@ export default function Dashboard() {
     const [user, setUser] = useState(null);
     const [orbState, setOrbState] = useState('idle');
     const [voiceBrief, setVoiceBrief] = useState(null);
-    const [activated, setActivated] = useState(false);
 
     useEffect(() => {
         supabase.auth.getUser().then(({ data }) => setUser(data.user));
@@ -582,7 +581,7 @@ export default function Dashboard() {
                     <KleosOrb size={280} state={orbState} />
                 </div>
 
-                {/* Mic / Activate — only visible when orb is centered */}
+                {/* Mic status — only visible when orb is centered */}
                 {!isExpanded && (
                     <div style={{
                         position: 'absolute',
@@ -596,48 +595,25 @@ export default function Dashboard() {
                         gap: '10px',
                         animation: 'fadeIn 0.4s ease forwards',
                     }}>
-                        {!activated ? (
-                            <button
-                                onClick={() => setActivated(true)}
-                                style={{
-                                    padding: '10px 28px',
-                                    borderRadius: '50px',
-                                    border: '1px solid rgba(255,140,66,0.35)',
-                                    background: 'rgba(255,140,66,0.08)',
-                                    color: 'rgba(255,200,120,0.85)',
-                                    fontSize: '12px',
-                                    letterSpacing: '2px',
-                                    textTransform: 'uppercase',
-                                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s',
-                                }}
-                            >
-                                Activate Kleos
-                            </button>
-                        ) : (
-                            <>
-                                <button className="gradient-border" style={{
-                                    width: '48px', height: '48px', borderRadius: '50%',
-                                    background: awake ? 'rgba(255,140,66,0.2)' : listening ? 'rgba(255,140,66,0.08)' : 'transparent',
-                                    border: 'none',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    cursor: 'default',
-                                    color: awake ? 'rgba(255,200,100,1)' : listening ? 'rgba(255,180,100,0.6)' : 'rgba(255,180,100,0.25)',
-                                    transition: 'background 0.2s, color 0.2s',
-                                }}>
-                                    <MicIcon />
-                                </button>
-                                <p style={{
-                                    color: awake ? 'rgba(255,200,100,0.8)' : listening ? 'rgba(255,180,100,0.4)' : 'rgba(255,200,150,0.15)',
-                                    fontSize: '11px',
-                                    letterSpacing: '2px',
-                                    textTransform: 'uppercase',
-                                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-                                    transition: 'color 0.2s',
-                                }}>{awake ? 'Go ahead...' : listening ? 'Say "Kleos"' : 'Always listening'}</p>
-                            </>
-                        )}
+                        <button className="gradient-border" style={{
+                            width: '48px', height: '48px', borderRadius: '50%',
+                            background: awake ? 'rgba(255,140,66,0.2)' : listening ? 'rgba(255,140,66,0.08)' : 'transparent',
+                            border: 'none',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            cursor: 'default',
+                            color: awake ? 'rgba(255,200,100,1)' : listening ? 'rgba(255,180,100,0.6)' : 'rgba(255,180,100,0.25)',
+                            transition: 'background 0.2s, color 0.2s',
+                        }}>
+                            <MicIcon />
+                        </button>
+                        <p style={{
+                            color: awake ? 'rgba(255,200,100,0.8)' : listening ? 'rgba(255,180,100,0.4)' : 'rgba(255,200,150,0.15)',
+                            fontSize: '11px',
+                            letterSpacing: '2px',
+                            textTransform: 'uppercase',
+                            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+                            transition: 'color 0.2s',
+                        }}>{awake ? 'Go ahead...' : listening ? 'Say "Kleos"' : 'Always listening'}</p>
                     </div>
                 )}
 
