@@ -32,11 +32,11 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = "sB7vwSCyX0tQmU24cW2C"
 
 # Pinterest app-level token cache
-_pinterest_token: str | None = None
+_pinterest_token = None  # type: str
 _pinterest_token_expiry: float = 0.0
 
 
-async def get_pinterest_token() -> str | None:
+async def get_pinterest_token():
     global _pinterest_token, _pinterest_token_expiry
     if not PINTEREST_APP_ID or not PINTEREST_APP_SECRET:
         return None
